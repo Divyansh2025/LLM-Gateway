@@ -39,7 +39,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("POST /v1/chat/completions", proxy.NewHandler(cfg.Providers, client, log))
+	mux.Handle("POST /v1/chat/completions", proxy.NewHandler(cfg, client, log, proxy.Options{}))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})
@@ -58,7 +58,11 @@ func main() {
 		for name := range cfg.Providers {
 			providers = append(providers, name)
 		}
-		log.Info("listening", "addr", cfg.Addr, "providers", providers)
+		routes := make([]string, 0, len(cfg.Routes))
+		for name := range cfg.Routes {
+			routes = append(routes, name)
+		}
+		log.Info("listening", "addr", cfg.Addr, "providers", providers, "routes", routes)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server", "err", err)
 			os.Exit(1)

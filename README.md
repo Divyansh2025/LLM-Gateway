@@ -9,7 +9,8 @@ Written in Go with only the standard library so far.
 
 ## Status
 
-Step 1 of the roadmap: a working proxy for OpenAI, Groq and Gemini, with streaming.
+Steps 1 and 2 of the roadmap: a proxy for OpenAI, Groq and Gemini with streaming,
+retries, circuit breakers and fallback routes.
 
 ## Run it
 
@@ -27,6 +28,30 @@ The `provider/` prefix on `model` picks the upstream; the rest is sent to that
 provider as the model name. Every other field (messages, tools, `stream`, ...) is
 passed through unchanged, so existing OpenAI SDKs work by changing the base URL.
 
+### Fallback routes
+
+A route is a name clients use as the model, mapped to targets tried in order:
+
+```sh
+export GATEWAY_ROUTES='fast=groq/llama-3.1-8b-instant,gemini/gemini-2.0-flash;smart=openai/gpt-4o,gemini/gemini-2.5-pro'
+curl localhost:8080/v1/chat/completions -d '{"model":"fast","messages":[{"role":"user","content":"Say hi"}]}'
+```
+
+For each target the gateway:
+
+- retries network errors, 429 and 5xx up to 3 times, waiting a random time that
+  grows with each try (exponential backoff with full jitter);
+- returns any other 4xx straight away, since retrying a bad request or bad key fails the same way;
+- moves to the next target when retries run out.
+
+Each provider has a circuit breaker. After 5 consecutive failures it opens and
+the gateway skips that provider for 30 seconds, so requests fail over instantly
+instead of waiting on a dead provider. Then one probe request decides whether it
+closes again.
+
+Response headers `X-Gateway-Provider` and `X-Gateway-Attempts` show who served the
+request and how many upstream calls it took.
+
 ## Test
 
 ```sh
@@ -40,15 +65,16 @@ Tests run against fake upstream servers, so no API keys are needed.
 | Path | What it does |
 | --- | --- |
 | `cmd/gateway` | Server startup, timeouts, graceful shutdown |
-| `internal/config` | Reads provider keys and base URLs from the environment |
-| `internal/proxy` | Routes by model prefix, forwards the request, streams the response back |
+| `internal/config` | Reads provider keys, base URLs and routes from the environment |
+| `internal/proxy` | Resolves the model to targets, retries and fails over, streams the response back |
+| `internal/breaker` | Per-provider circuit breaker (closed, open, half-open) |
 
 ## Roadmap
 
 Each step is one pull request with tests. Steps 5 and 7 produce the numbers for the README and resume.
 
-1. **Proxy** — route by `provider/model`, pass streaming through, OpenAI-style errors.
-2. **Reliability** — retries with backoff, per-provider timeouts, circuit breaker, and fallback chains (`groq` fails → `gemini`).
+1. ~~**Proxy**~~ — route by `provider/model`, pass streaming through, OpenAI-style errors.
+2. ~~**Reliability**~~ — retries with backoff, circuit breaker, and fallback routes (`groq` fails → `gemini`).
 3. **Anthropic** — translate OpenAI format to and from the Anthropic Messages API, including streaming.
 4. **Usage and cost** — API keys per client, token counts and cost per request stored in Postgres, per-key rate and budget limits in Redis.
 5. **Observability** — Prometheus metrics (latency histograms, errors, tokens), OpenTelemetry traces, a Grafana dashboard.
